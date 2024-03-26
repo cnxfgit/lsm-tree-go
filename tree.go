@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"lsm/memtable"
 	"lsm/wal"
 	"os"
@@ -58,8 +59,6 @@ func NewTree(conf *Config) (*Tree, error) {
 	return &t, nil
 }
 
-
-
 // 运行 compact 协程.
 func (t *Tree) compact() {
 	for {
@@ -95,6 +94,71 @@ func (t *Tree) compactMemTable(memCompactItem *memTableCompactItem) {
 
 	// 3 删除相应的预写日志. 因为 memtable 落盘后数据已经安全，不存在丢失风险
 	_ = os.Remove(memCompactItem.walFile)
+}
+
+// 将 memtable 的数据溢写落盘到 level0 层成为一个新的 sst 文件
+func (t *Tree) flushMemTable(memTable memtable.MemTable) {
+	// memtable 写到 level 0 层 sstable 中
+	seq := t.levelToSeq[0].Load() + 1
+
+	// 创建sst writer
+	sstWriter, _ := NewSSTWriter(t.sstFile(0, seq), t.conf)
+	defer sstWriter.Close()
+
+	// 遍历 memtable 写入数据到 sst writer
+	for _, kv := range memTable.All() {
+		sstWriter.Appned(kv.Key, kv.Value)
+	}
+
+	// sstable 落盘
+	size, blockToFilter, index := sstWriter.Finish()
+
+	// 构造节点添加到 tree 的 node 中
+	t.insertNode(0, seq, size, blockToFilter, index)
+	// 尝试引发一轮 compact 操作
+	t.tryTriggerCompact(0)
+}
+
+func (t *Tree) insertNode(level int, seq int32, size uint64, blockToFilter map[uint64][]byte, index []*Index) {
+	file := t.sstFile(level, seq)
+	sstReader, _ := NewSSTReader(file, t.conf)
+
+	t.insertNodeWithReader(sstReader, level, seq, size, blockToFilter, index)
+}
+
+// 插入一个 node 到指定 level 层
+func (t *Tree) insertNodeWithReader(sstReader *SSTReader, level int, seq int32,
+	size uint64, blockToFilter map[uint64][]byte, index []*Index) {
+	file := t.sstFile(level, seq)
+	// 记录当前 level 层对应的 seq 号
+	t.levelToSeq[level].Store(seq)
+
+	// 创建一个lsm node
+	newNode := NewNode(t.conf, file, sstReader, level, seq, size, blockToFilter, index)
+	// 对于 level0 而言，只需要 append 插入 node 即可
+	if level == 0 {
+		t.levelLocks[0].Lock()
+		t.nodes[level] = append(t.nodes[level], newNode)
+		t.levelLocks[0].Unlock()
+		return
+	}
+
+	// 对于 level1~levelk 层，需要根据 node 中 key 的大小，遵循顺序插入
+	for i := 0; i < len(t.nodes[level])-1; i++ {
+		// 遵循从小到大的遍历顺序，找到首个最小 key 比 newNode 最大 key 还大的 node，将 newNode 插入在其之前
+		if bytes.Compare(newNode.End(), t.nodes[level][i+1].Start()) < 0 {
+			t.levelLocks[level].Lock()
+			t.nodes[level] = append(t.nodes[level][:i+1], t.nodes[level][i:]...)
+			t.nodes[level][i+1] = newNode
+			t.levelLocks[level].Unlock()
+			return
+		}
+	}
+
+	// 遍历完 level 层所有节点都还没插入 newNode，说明 newNode 是该层 key 值最大的节点，则 append 到最后即可
+	t.levelLocks[level].Lock()
+	t.nodes[level] = append(t.nodes[level], newNode)
+	t.levelLocks[level].Unlock()
 }
 
 // 写入一组 kv 对到 lsm tree. 会直接写入到读写 memtable 中.
@@ -141,6 +205,55 @@ func (t *Tree) refreshMemTableLocked() {
 	// 构造一个新的读写 memtable，并构造与之相应的 wal 文件.
 	t.memTableIndex++
 	t.newMemTable()
+}
+
+// 针对 level 层进行排序归并操作
+func (t *Tree) compactLevel(level int) {
+    // 获取到 level 和 level + 1 层内需要进行本次归并的节点
+    pickedNodes := t.pickCompactNodes(level)
+
+
+    // 插入到 level + 1 层对应的目标 sstWriter
+    seq := t.levelToSeq[level+1].Load() + 1
+    sstWriter, _ := NewSSTWriter(t.sstFile(level+1, seq), t.conf)
+    defer sstWriter.Close()
+
+
+    // 获取 level + 1 层每个 sst 文件的大小阈值
+    sstLimit := t.conf.SSTSize * uint64(math.Pow10(level+1))
+    // 获取本次排序归并的节点涉及到的所有 kv 数据
+    pickedKVs := t.pickedNodesToKVs(pickedNodes)
+    // 遍历每笔需要归并的 kv 数据
+    for i := 0; i < len(pickedKVs); i++ {
+        // 倘若新生成的 level + 1 层 sst 文件大小已经超限
+        if sstWriter.Size() > sstLimit {
+            // 将 sst 文件溢写落盘
+            size, blockToFilter, index := sstWriter.Finish()
+            // 将 sst 文件对应 node 插入到 lsm tree 内存结构中
+            t.insertNode(level+1, seq, size, blockToFilter, index)
+            // 构造一个新的 level + 1 层 sstWriter
+            seq = t.levelToSeq[level+1].Load() + 1
+            sstWriter, _ = NewSSTWriter(t.sstFile(level+1, seq), t.conf)
+            defer sstWriter.Close()
+        }
+
+
+        // 将 kv 数据追加到 sstWriter
+        sstWriter.Append(pickedKVs[i].Key, pickedKVs[i].Value)
+        // 倘若这是最后一笔 kv 数据，需要负责把 sstWriter 溢写落盘并把对应 node 插入到 lsm tree 内存结构中
+        if i == len(pickedKVs)-1 {
+            size, blockToFilter, index := sstWriter.Finish()
+            t.insertNode(level+1, seq, size, blockToFilter, index)
+        }
+    }
+
+
+    // 移除这部分被合并的节点
+    t.removeNodes(level, pickedNodes)
+
+
+    // 尝试触发下一层的 compact 操作
+    t.tryTriggerCompact(level + 1)
 }
 
 func (t *Tree) newMemTable() {

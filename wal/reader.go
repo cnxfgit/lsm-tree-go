@@ -100,3 +100,9 @@ func (w *WALReader) readAll(reader *bytes.Reader) ([]*memtable.KV, error) {
 
 	return kvs, nil
 }
+
+
+func (w *WALReader) Close() {
+	w.reader.Reset(w.src)
+	_ = w.src.Close()
+}

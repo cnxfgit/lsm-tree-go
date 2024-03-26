@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -54,6 +55,14 @@ func (t *Tree) getSortedSSTEntries() ([]fs.DirEntry, error) {
 	})
 
 	return sstEntries, nil
+}
+
+func getLevelSeqFromSSTFile(file string) (level int, seq int32) {
+	file = strings.Replace(file, ".sst", "", -1)
+	splitted := strings.Split(file, "_")
+	level, _ = strconv.Atoi(splitted[0])
+	seq_, _ := strconv.Atoi(splitted[1])
+	return level, int32(seq_)
 }
 
 // 将一个 sst 文件作为一个 node 加载进入 lsm tree 的拓扑结构中
