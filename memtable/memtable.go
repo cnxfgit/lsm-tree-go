@@ -14,3 +14,4 @@ type MemTableConstructor = func() MemTable
 type KV struct {
 	Key, Value []byte
 }
+

@@ -2,11 +2,11 @@ package main
 
 import (
 	"io/fs"
+	"lsm/wal"
 	"os"
+	"path"
 	"sort"
 	"strings"
-
-	"golang.org/x/tools/go/analysis/passes/nilfunc"
 )
 
 // 读取 sst 文件，还原出整棵树
@@ -86,5 +86,83 @@ func (t *Tree) loadNode(sstEntry fs.DirEntry) error {
 	level, seq := getLevelSeqFromSSTFile(sstEntry.Name())
 	// 将 sst 文件作为一个 node 插入到 lsm tree 中
 	t.insertNodeWithReader(sstReader, level, seq, size, blockToFilter, index)
+	return nil
+}
+
+// 读取 wal 还原出 memtable
+func (t *Tree) constructMemtable() error {
+	// 1 读 wal 目录，获取所有的 wal 文件
+	raw, _ := os.ReadDir(path.Join(t.conf.Dir, "walfile"))
+
+	// 2 wal 文件除杂
+	var wals []fs.DirEntry
+	for _, entry := range raw {
+		if entry.IsDir() {
+			continue
+		}
+
+		// 要求文件必须为 .wal 类型
+		if !strings.HasSuffix(entry.Name(), ".wal") {
+			continue
+		}
+
+		wals = append(wals, entry)
+	}
+
+	// 3 倘若 wal 目录不存在或者 wal 文件不存在，则构造一个新的 memtable
+	if len(wals) == 0 {
+		t.newMemTable()
+		return nil
+	}
+
+	// 3 依次还原 memtable. 最晚一个 memtable 作为读写 memtable
+	// 前置 memtable 作为只读 memtable，分别添加到内存 slice 和 channel 中.
+	return t.restoreMemTable(wals)
+}
+
+// 基于 wal 文件还原出一系列只读 memtable 和唯一一个读写 memtable
+func (t *Tree) restoreMemTable(wals []fs.DirEntry) error {
+	// 1 wal 排序，index 单调递增，数据实时性也随之单调递增
+	sort.Slice(wals, func(i, j int) bool {
+		indexI := walFileToMemTableIndex(wals[i].Name())
+		indexJ := walFileToMemTableIndex(wals[j].Name())
+		return indexI < indexJ
+	})
+
+	// 2 依次还原 memtable，添加到内存和 channel
+	for i := 0; i < len(wals); i++ {
+		name := wals[i].Name()
+		file := path.Join(t.conf.Dir, "walfile", name)
+
+		// 构建与 wal 文件对应的 walReader
+		walReader, err := wal.NewWALReader(file)
+		if err != nil {
+			return err
+		}
+		defer walReader.Close()
+
+		// 通过 reader 读取 wal 文件内容，将数据注入到 memtable 中
+		memtable := t.conf.MemTableConstructor()
+		if err = walReader.RestoreToMemtable(memtable); err != nil {
+			return err
+		}
+
+		if i == len(wals)-1 {
+			// 倘若是最后一个 wal 文件，则 memtable 作为读写 memtable
+			t.memTable = memtable
+			t.memTableIndex = walFileToMemTableIndex(name)
+			t.walWriter, _ = wal.NewWaALWriter(file)
+		} else {
+			// memtable 作为只读 memtable，需要追加到只读 slice 以及 channel 中，继续推进完成溢写落盘流程
+			memTableCompactItem := memTableCompactItem{
+				walFile:  file,
+				memTable: memtable,
+			}
+
+			t.rOnlyMemTable = append(t.rOnlyMemTable, &memTableCompactItem)
+			t.memCompactC <- &memTableCompactItem
+		}
+	}
+
 	return nil
 }

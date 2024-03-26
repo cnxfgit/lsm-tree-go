@@ -4,7 +4,6 @@ import (
 	"lsm/memtable"
 	"lsm/wal"
 	"os"
-	"path"
 	"sync"
 	"sync/atomic"
 )
@@ -61,22 +60,6 @@ func NewTree(conf *Config) (*Tree, error) {
 
 
 
-// 读取 wal 还原出 memtable
-func (t *Tree) constructMemtable() error {
-	// 1 读 wal 目录，获取所有的 wal 文件
-	wals, _ := os.ReadDir(path.Join(t.conf.Dir, "walfile"))
-
-	// 2 倘若 wal 目录不存在或者 wal 文件不存在，则构造一个新的 memtable
-	if len(wals) == 0 {
-		t.newMemTable()
-		return nil
-	}
-
-	// 3 依次还原 memtable. 最晚一个 memtable 作为读写 memtable
-	// 前置 memtable 作为只读 memtable，分别添加到内存 slice 和 channel 中.
-	return t.restoreMemTable(wals)
-}
-
 // 运行 compact 协程.
 func (t *Tree) compact() {
 	for {
@@ -92,6 +75,26 @@ func (t *Tree) compact() {
 			t.compactLevel(level)
 		}
 	}
+}
+
+// 将只读 memtable 溢写落盘成为 level0 层 sstable 文件
+func (t *Tree) compactMemTable(memCompactItem *memTableCompactItem) {
+	// 处理 memtable 溢写工作:
+	// 1 memtable 溢写到 0 层 sstable 中
+	t.flushMemTable(memCompactItem.memTable)
+
+	// 2 从 rOnly slice 中回收对应的 table
+	t.dataLock.Lock()
+	for i := 0; i < len(t.rOnlyMemTable); i++ {
+		if t.rOnlyMemTable[i].memTable != memCompactItem.memTable {
+			continue
+		}
+		t.rOnlyMemTable = t.rOnlyMemTable[i+1:]
+	}
+	t.dataLock.Unlock()
+
+	// 3 删除相应的预写日志. 因为 memtable 落盘后数据已经安全，不存在丢失风险
+	_ = os.Remove(memCompactItem.walFile)
 }
 
 // 写入一组 kv 对到 lsm tree. 会直接写入到读写 memtable 中.
@@ -138,6 +141,11 @@ func (t *Tree) refreshMemTableLocked() {
 	// 构造一个新的读写 memtable，并构造与之相应的 wal 文件.
 	t.memTableIndex++
 	t.newMemTable()
+}
+
+func (t *Tree) newMemTable() {
+	t.walWriter, _ = wal.NewWaALWriter(t.walFile())
+	t.memTable = t.conf.MemTableConstructor()
 }
 
 // 根据 key 读取数据.
