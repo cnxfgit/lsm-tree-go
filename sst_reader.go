@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"lsm/memtable"
 	"os"
 	"path"
 )
@@ -19,6 +18,12 @@ type SSTReader struct {
 	filterSize   uint64        // 过滤器块的大小，单位 byte
 	indexOffset  uint64        // 索引块起始位置在 sstable 的 offset
 	indexSize    uint64        // 索引块的大小，单位 byte
+}
+
+// kv 对
+type KV struct {
+	Key   []byte
+	Value []byte
 }
 
 // sstReader 构造器
@@ -224,12 +229,12 @@ func (s *SSTReader) readFilter(block []byte) (map[uint64][]byte, error) {
 }
 
 // 读取某个 block 的数据
-func (s *SSTReader) ReadBlockData(block []byte) ([]*memtable.KV, error) {
+func (s *SSTReader) ReadBlockData(block []byte) ([]*KV, error) {
 	// 需要临时记录前一个 key 的内容
 	var prevKey []byte
 	// block 数据封装成 buffer
 	buf := bytes.NewBuffer(block)
-	var data []*memtable.KV
+	var data []*KV
 
 	for {
 		// 每次读取一条 kv 对
@@ -241,7 +246,7 @@ func (s *SSTReader) ReadBlockData(block []byte) ([]*memtable.KV, error) {
 			return nil, err
 		}
 
-		data = append(data, &memtable.KV{
+		data = append(data, &KV{
 			Key:   key,
 			Value: value,
 		})
@@ -252,7 +257,7 @@ func (s *SSTReader) ReadBlockData(block []byte) ([]*memtable.KV, error) {
 }
 
 // 读取 sstable 下的全量 kv 数据
-func (s *SSTReader) ReadData() ([]*memtable.KV, error) {
+func (s *SSTReader) ReadData() ([]*KV, error) {
 	// 如果 footer 信息还没读取，则先完成 footer 信息加载
 	if s.indexOffset == 0 || s.indexSize == 0 || s.filterOffset == 0 || s.filterSize == 0 {
 		if err := s.ReadFooter(); err != nil {

@@ -112,7 +112,7 @@ func (s *SSTWriter) refreshBlock() {
 }
 
 // 完成 sstable 的全部处理流程，包括将其中的数据溢写到磁盘，并返回信息供上层的 lsm 获取缓存
-func (s *SSTWriter) Finish(size uint64, blockToFilter map[uint64][]byte, index []*Index) {
+func (s *SSTWriter) Finish() (size uint64, blockToFilter map[uint64][]byte, index []*Index) {
 	// 完成最后一个块的处理
 	s.refreshBlock()
 	// 补齐最后一个 index
@@ -145,4 +145,34 @@ func (s *SSTWriter) Finish(size uint64, blockToFilter map[uint64][]byte, index [
 	blockToFilter = s.blockToFilter
 	index = s.index
 	return
+}
+
+func (s *SSTWriter) Size() uint64 {
+	return uint64(s.dataBuf.Len())
+}
+
+func (s *SSTWriter) Close() {
+	_ = s.dest.Close()
+	s.dataBuf.Reset()
+	s.indexBuf.Reset()
+	s.filterBuf.Reset()
+}
+
+func (s *SSTWriter) Append(key, value []byte) {
+	// 倘若开启一个新的数据库，需要添加索引
+	if s.dataBlock.entriesCnt == 0 {
+		s.insertIndex(key)
+	}
+
+	// 将数据写入到数据块中
+	s.dataBlock.Appned(key, value)
+	// 将key添加到块的布隆过滤器中
+	s.conf.Filter.Add(key)
+	// 记录一下最新的 key
+	s.prevKey = key
+
+	// 倘若数据块大小超限，则需要将其添加到 dataBuffer，并重置块
+	if s.dataBlock.Size() >= s.conf.SSTDataBlockSize {
+		s.refreshBlock()
+	}
 }
