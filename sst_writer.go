@@ -63,7 +63,7 @@ func (s *SSTWriter) Appned(key, value []byte) {
 	}
 
 	// 将数据写入到数据块中
-	s.dataBlock.Appned(key, value)
+	s.dataBlock.Append(key, value)
 	// 将 key 添加到块的布隆过滤器中
 	s.conf.Filter.Add(key)
 	// 记录一下最新的 key
@@ -81,7 +81,7 @@ func (s *SSTWriter) insertIndex(key []byte) {
 	n := binary.PutUvarint(s.assistScratch[0:], s.prevBlockOffset)
 	n += binary.PutUvarint(s.assistScratch[n:], s.prevBlockSize)
 
-	s.indexBlock.Appned(indexKey, s.assistScratch[:n])
+	s.indexBlock.Append(indexKey, s.assistScratch[:n])
 	s.index = append(s.index, &Index{
 		// 索引key
 		Key: indexKey,
@@ -103,7 +103,7 @@ func (s *SSTWriter) refreshBlock() {
 	s.blockToFilter[s.prevBlockOffset] = filterBitmap
 	n := binary.PutUvarint(s.assistScratch[0:], s.prevBlockOffset)
 	// 将布隆过滤器数据写入到 filter bitmap
-	s.filterBlock.Appned(s.assistScratch[:n], filterBitmap)
+	s.filterBlock.Append(s.assistScratch[:n], filterBitmap)
 	// 重置布隆过滤器
 	s.conf.Filter.Reset()
 
@@ -165,7 +165,7 @@ func (s *SSTWriter) Append(key, value []byte) {
 	}
 
 	// 将数据写入到数据块中
-	s.dataBlock.Appned(key, value)
+	s.dataBlock.Append(key, value)
 	// 将key添加到块的布隆过滤器中
 	s.conf.Filter.Add(key)
 	// 记录一下最新的 key

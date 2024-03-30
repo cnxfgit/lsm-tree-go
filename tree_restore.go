@@ -160,7 +160,7 @@ func (t *Tree) restoreMemTable(wals []fs.DirEntry) error {
 			// 倘若是最后一个 wal 文件，则 memtable 作为读写 memtable
 			t.memTable = memtable
 			t.memTableIndex = walFileToMemTableIndex(name)
-			t.walWriter, _ = wal.NewWaALWriter(file)
+			t.walWriter, _ = wal.NewWALWriter(file)
 		} else {
 			// memtable 作为只读 memtable，需要追加到只读 slice 以及 channel 中，继续推进完成溢写落盘流程
 			memTableCompactItem := memTableCompactItem{

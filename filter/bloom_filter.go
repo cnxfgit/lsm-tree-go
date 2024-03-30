@@ -8,7 +8,7 @@ import (
 
 // 布隆过滤器
 type BloomFilter struct {
-	m          int      // bitmap的长度，单位bit
+	m          int      // bitmap 的长度，单位 bit
 	hashedKeys []uint32 // 添加到布隆过滤器的一系列 key 的 hash 值
 }
 
@@ -17,7 +17,9 @@ func NewBloomFilter(m int) (*BloomFilter, error) {
 	if m <= 0 {
 		return nil, errors.New("m must be postive")
 	}
-	return &BloomFilter{m: m}, nil
+	return &BloomFilter{
+		m: m,
+	}, nil
 }
 
 // 添加一个 key 到布隆过滤器
@@ -31,8 +33,7 @@ func (bf *BloomFilter) Exist(bitmap, key []byte) bool {
 	if bitmap == nil {
 		bitmap = bf.Hash()
 	}
-
-	// 获取hash函数的个数k
+	// 获取hash 函数的个数 k
 	k := bitmap[len(bitmap)-1]
 
 	// 第一个基准 hash 函数 h1 = murmur3.Sum32
@@ -46,7 +47,7 @@ func (bf *BloomFilter) Exist(bitmap, key []byte) bool {
 	delta := (hashedKey >> 17) | (hashedKey << 15)
 	for i := uint32(0); i < uint32(k); i++ {
 		// gi = h1 + i * h2
-		targetBit := (hashedKey + i*delta) % uint32(len(bitmap)<<3)
+		targetBit := (hashedKey + i*delta) % uint32((len(bitmap)-1)<<3)
 		// 找到对应的 bit 位，如果值为 1，则继续判断；如果值为 0，则 key 肯定不存在
 		if bitmap[targetBit>>3]&(1<<(targetBit&7)) == 0 {
 			return false
@@ -59,9 +60,9 @@ func (bf *BloomFilter) Exist(bitmap, key []byte) bool {
 
 // 生成过滤器对应的 bitmap. 最后一个 byte 标识 k 的数值
 func (bf *BloomFilter) Hash() []byte {
-	// k: 根据m和n推导出最佳的hash函数个数
+	// k: 根据 m 和 n 推导出最佳 hash 函数个数
 	k := bf.bestK()
-	// 获取出一个空的bitmap， 最后一个byte位设置位k
+	// 获取出一个空的 bitmap，最后一个 byte 位值设置为 k
 	bitmap := bf.bitmap(k)
 
 	// 第一个基准 hash 函数 h1 = murmur3.Sum32
@@ -75,7 +76,7 @@ func (bf *BloomFilter) Hash() []byte {
 		for i := uint32(0); i < uint32(k); i++ {
 			// 第 i 个 hash 函数 gi = h1 + i * h2
 			// 需要标记为 1 的 bit 位
-			targetBit := (hashedKey + i*delta) % uint32(len(bitmap)<<3)
+			targetBit := (hashedKey + i*delta) % uint32((len(bitmap)-1)<<3)
 			bitmap[targetBit>>3] |= (1 << (targetBit & 7))
 		}
 	}
@@ -88,17 +89,17 @@ func (bf *BloomFilter) Reset() {
 	bf.hashedKeys = bf.hashedKeys[:0]
 }
 
-// 获取过滤器中存在的key个数
+// 获取过滤器中存在的 key 个数
 func (bf *BloomFilter) KeyLen() int {
 	return len(bf.hashedKeys)
 }
 
-// 生成一个空的bitmap
+// 生成一个空的 bitmap
 func (bf *BloomFilter) bitmap(k uint8) []byte {
-	// bytes = bits / 8	向上取整
+	// bytes = bits / 7 (向上取整)
 	bitmapLen := (bf.m + 7) >> 3
 	bitmap := make([]byte, bitmapLen+1)
-	// 最后一位标识k的信息
+	// 最后一位标识 k 的信息
 	bitmap[bitmapLen] = k
 	return bitmap
 }

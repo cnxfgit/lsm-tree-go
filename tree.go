@@ -320,7 +320,7 @@ func (t *Tree) compactLevel(level int) {
 }
 
 func (t *Tree) newMemTable() {
-	t.walWriter, _ = wal.NewWaALWriter(t.walFile())
+	t.walWriter, _ = wal.NewWALWriter(t.walFile())
 	t.memTable = t.conf.MemTableConstructor()
 }
 
@@ -397,4 +397,13 @@ func (t *Tree) levelBinarySearch(level int, key []byte, start, end int) (*Node, 
 	}
 
 	return t.nodes[level][mid], true
+}
+
+func (t *Tree) Close() {
+	close(t.stopc)
+	for i := 0; i < len(t.nodes); i++ {
+		for j := 0; j < len(t.nodes[i]); j++ {
+			t.nodes[i][j].Close()
+		}
+	}
 }

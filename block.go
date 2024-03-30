@@ -25,7 +25,7 @@ func NewBlock(conf *Config) *Block {
 }
 
 // 追加一组kv对到数据块中
-func (b *Block) Appned(key, value []byte) {
+func (b *Block) Append(key, value []byte) {
 	// 兜底执行：设置 prevKey 为当前写入的 key；累加 entriesCnt 数量
 	defer func() {
 		b.prevKey = append(b.prevKey[:0], key...)

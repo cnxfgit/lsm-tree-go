@@ -100,7 +100,7 @@ func (c *Config) check() error {
 	}
 
 	// wal 文件目录确保存在
-	walDir := path.Join(c.Dir, "walfile")
+	walDir := path.Join(c.Dir, "/walfile")
 	if _, err := os.ReadDir(walDir); err != nil {
 		_, ok := err.(*fs.PathError)
 		if !ok || !strings.HasSuffix(err.Error(), "no such file or directory") {

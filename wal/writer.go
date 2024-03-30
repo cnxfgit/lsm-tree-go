@@ -13,7 +13,7 @@ type WALWriter struct {
 }
 
 // 构造器
-func NewWaALWriter(file string) (*WALWriter, error) {
+func NewWALWriter(file string) (*WALWriter, error) {
 	// 打开 wal 文件，如果文件不存在则进行创建
 	dest, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

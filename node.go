@@ -104,3 +104,7 @@ func (n *Node) Destroy() {
 	n.sstReader.Close()
 	_ = os.Remove(path.Join(n.conf.Dir, n.file))
 }
+
+func (n *Node) Close() {
+	n.sstReader.Close()
+}
